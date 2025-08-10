@@ -1,1 +1,740 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Dodgeball Simulator — Mobile + DPR</title>
+<style>
+  :root { --bg:#14171a; --panel:#1f2328; --text:#e6edf3; --muted:#9aa4b2; --accent:#4aa3ff; --ok:#61d095; --warn:#ffb454; }
+  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial; background:var(--bg); color:var(--text); display:grid; grid-template-rows:auto 1fr; height:100vh; }
+  header { padding:12px 16px; background:var(--panel); display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0 12px 0 0; color:var(--muted); font-weight:600; }
+  button { background:#2b3138; color:var(--text); border:1px solid #3a414a; padding:8px 12px; border-radius:8px; cursor:pointer; }
+  button:hover { border-color:#4a535e; }
+  .pill { padding:6px 10px; border-radius:999px; border:1px solid #3a414a; color:var(--muted); font-size:12px; }
+  .row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .slider { display:flex; align-items:center; gap:8px; }
+  .slider input[type="range"] { width:160px; }
+  select { background:#1b1f24; color:var(--text); border:1px solid #2b3138; padding:6px 8px; border-radius:8px; }
+  #wrap { display:grid; grid-template-columns:1fr 380px; gap:0; min-height:0; }
+  #panel { background:var(--panel); padding:14px; border-left:1px solid #2b3138; display:flex; flex-direction:column; gap:12px; }
+  #stats { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  #stats > div { background:#20252b; border:1px solid #2b3138; border-radius:8px; padding:10px; }
+  #stats .label { color:var(--muted); font-size:12px; }
+  #stats .value { font-size:18px; font-weight:700; margin-top:2px; }
+  canvas { display:block; width:100%; height:100%; background:radial-gradient(1200px 700px at 50% 40%, #0f1215, #0c0f12 60%, #0a0d10); }
+  .legend { font-size:12px; color:var(--muted); }
+  .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 8px; border:1px solid #2b3138; border-radius:999px; background:#1b1f24; margin-right:6px; }
+  .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+  .badge { font-size:12px; padding:2px 8px; border-radius:999px; border:1px solid #36414d; background:#1b222a; }
+  .bPlayers { color:#9bd1ff; }
+  .bThrowers { color:#ff9a9a; }
+
+  /* Scoreboard overlay */
+  #overlay { position:fixed; inset:0; background:rgba(5,6,8,0.7); display:none; align-items:center; justify-content:center; z-index:5; }
+  #board { width:min(700px, 92vw); max-height:80vh; overflow:auto; background:#0f1418; border:1px solid #2b3138; border-radius:12px; padding:16px; box-shadow:0 10px 40px rgba(0,0,0,0.4); }
+  #board h2 { margin:0 0 8px 0; font-size:18px; color:#dce3ea; }
+  #board .sum { color:var(--muted); margin-bottom:10px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { border-bottom:1px solid #27303a; padding:8px; text-align:left; }
+  th { color:#aab6c2; position:sticky; top:0; background:#10161c; }
+
+  /* Touch controls */
+  #touchWrap {
+    position:fixed; inset:auto 0 0 0; height:42vh; min-height:210px;
+    display:none; /* toggled on */
+    pointer-events:none; /* children re-enable */
+    z-index:4;
+  }
+  .pad {
+    position:absolute; width:160px; height:160px; border-radius:50%;
+    background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.12);
+    bottom:18px; pointer-events:auto; touch-action:none; user-select:none;
+    backdrop-filter: blur(2px);
+  }
+  #padL { left:18px; }
+  #padR { right:18px; }
+  .knob {
+    position:absolute; left:50%; top:50%; width:76px; height:76px; border-radius:50%;
+    background:rgba(255,255,255,0.12); border:1px solid rgba(255,255,255,0.2);
+    transform:translate(-50%,-50%);
+  }
+  .pad label {
+    position:absolute; left:0; right:0; bottom:-18px; text-align:center; font-size:12px; color:#9bd1ff;
+  }
+
+  @media (max-width: 920px) {
+    #wrap { grid-template-columns:1fr; }
+    #panel { order:-1; border-left:none; border-bottom:1px solid #2b3138; }
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Dodgeball Simulator</h1>
+    <div class="row">
+      <button id="startBtn">Start</button>
+      <button id="pauseBtn">Pause</button>
+      <button id="resetBtn">Reset</button>
+      <button id="nextRoundBtn">Next Round</button>
+    </div>
+    <span id="status" class="pill">Ready</span>
+  </header>
+
+  <div id="wrap">
+    <canvas id="canvas"></canvas>
+    <aside id="panel">
+      <div class="legend">
+        <div class="chip"><span class="dot" style="background:#4aa3ff"></span> Team Blue (2 Human + 3 AI)</div>
+        <div class="chip"><span class="dot" style="background:#ff5d5d"></span> Throwers (2)</div>
+        <div class="chip"><span class="dot" style="background:#b184ff"></span> Balls</div>
+        <div class="chip"><span class="dot" style="background:#ffd76a"></span> Power-ups</div>
+      </div>
+
+      <div class="row slider">
+        <label for="playerSpeed">Player speed</label>
+        <input id="playerSpeed" type="range" min="40" max="280" step="5" value="140">
+        <span id="playerSpeedVal">140</span>
+      </div>
+      <div class="row slider">
+        <label for="ballSpeed">Base ball speed</label>
+        <input id="ballSpeed" type="range" min="120" max="520" step="10" value="320">
+        <span id="ballSpeedVal">320</span>
+      </div>
+      <div class="row slider">
+        <label for="throwRate">Base throw every (s)</label>
+        <input id="throwRate" type="range" min="0.3" max="3" step="0.1" value="1.0">
+        <span id="throwRateVal">1.0</span>
+      </div>
+
+      <hr style="border-color:#2b3138;border-width:0;border-top:1px solid #2b3138;">
+
+      <div class="row">
+        <label for="aiDifficulty">Red AI difficulty</label>
+        <input id="aiDifficulty" type="range" min="0" max="2" step="1" value="1">
+        <span id="aiDifficultyVal">Normal</span>
+      </div>
+      <div class="row">
+        <label for="behavior">Thrower behavior</label>
+        <select id="behavior">
+          <option value="nearest">Nearest</option>
+          <option value="lead">Lead Shots</option>
+          <option value="volley">Volley & Suppress</option>
+        </select>
+      </div>
+      <div class="legend"><b>P1:</b> WASD • <b>P2:</b> Arrows. Press <b>Tab</b> to rotate human slots.</div>
+
+      <div class="row slider">
+        <label for="roundLen">Round length (s)</label>
+        <input id="roundLen" type="range" min="10" max="90" step="5" value="35">
+        <span id="roundLenVal">35</span>
+      </div>
+      <div class="row slider">
+        <label for="totalRounds">Total rounds</label>
+        <input id="totalRounds" type="range" min="1" max="15" step="1" value="5">
+        <span id="totalRoundsVal">5</span>
+      </div>
+
+      <div class="row">
+        <label for="touchToggle">Show touch controls</label>
+        <input id="touchToggle" type="checkbox">
+      </div>
+
+      <div id="stats">
+        <div><div class="label">Players remaining</div><div class="value" id="aliveVal">5</div></div>
+        <div><div class="label">Balls in play</div><div class="value" id="ballsVal">0</div></div>
+        <div><div class="label">Tagged out</div><div class="value" id="outVal">0</div></div>
+        <div><div class="label">Elapsed</div><div class="value" id="timeVal">0.0s</div></div>
+        <div><div class="label">Round</div><div class="value"><span id="roundVal">1</span>/<span id="roundMaxVal">5</span></div></div>
+        <div><div class="label">Timer</div><div class="value" id="roundTimerVal">35.0s</div></div>
+        <div><div class="label">Score: Players</div><div class="value" id="scorePlayers">0</div></div>
+        <div><div class="label">Score: Throwers</div><div class="value" id="scoreThrowers">0</div></div>
+      </div>
+
+      <div class="legend">
+        • Survive to timer → <span class="badge bPlayers">Players +1</span> • All tagged early → <span class="badge bThrowers">Throwers +1</span><br>
+        • Power-ups: ⚡ speed (~6s) • 🛡️ shield (~6s).
+      </div>
+    </aside>
+  </div>
+
+  <!-- Scoreboard overlay -->
+  <div id="overlay">
+    <div id="board">
+      <h2>Match Results</h2>
+      <div class="sum" id="boardSummary"></div>
+      <table>
+        <thead><tr><th>Round</th><th>Winner</th><th>Time (s)</th><th>Survivors</th></tr></thead>
+        <tbody id="boardBody"></tbody>
+      </table>
+      <div style="display:flex; gap:8px; margin-top:12px;">
+        <button id="restartBtn">Restart Match</button>
+        <button id="closeBoardBtn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Touch controls -->
+  <div id="touchWrap" aria-hidden="true">
+    <div id="padL" class="pad"><div class="knob"></div><label>P1</label></div>
+    <div id="padR" class="pad"><div class="knob"></div><label>P2</label></div>
+  </div>
+
+<script>
+(() => {
+  // ===== DPR CAP =====
+  const DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  // UI
+  const startBtn = document.getElementById('startBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const nextRoundBtn = document.getElementById('nextRoundBtn');
+  const statusEl = document.getElementById('status');
+
+  const aliveVal = document.getElementById('aliveVal');
+  const ballsVal = document.getElementById('ballsVal');
+  const outVal   = document.getElementById('outVal');
+  const timeVal  = document.getElementById('timeVal');
+  const roundVal = document.getElementById('roundVal');
+  const roundMaxVal = document.getElementById('roundMaxVal');
+  const roundTimerVal = document.getElementById('roundTimerVal');
+  const scorePlayersEl = document.getElementById('scorePlayers');
+  const scoreThrowersEl = document.getElementById('scoreThrowers');
+
+  const playerSpeed = document.getElementById('playerSpeed');
+  const ballSpeed   = document.getElementById('ballSpeed');
+  const throwRate   = document.getElementById('throwRate');
+  const playerSpeedVal = document.getElementById('playerSpeedVal');
+  const ballSpeedVal   = document.getElementById('ballSpeedVal');
+  const throwRateVal   = document.getElementById('throwRateVal');
+
+  const roundLen = document.getElementById('roundLen');
+  const roundLenVal = document.getElementById('roundLenVal');
+  const totalRounds = document.getElementById('totalRounds');
+  const totalRoundsVal = document.getElementById('totalRoundsVal');
+
+  const aiDifficulty = document.getElementById('aiDifficulty');
+  const aiDifficultyVal = document.getElementById('aiDifficultyVal');
+  const behaviorSel = document.getElementById('behavior');
+
+  const diffLabel = ['Easy','Normal','Hard'];
+  function reflectSliders() {
+    playerSpeedVal.textContent = playerSpeed.value;
+    ballSpeedVal.textContent = ballSpeed.value;
+    throwRateVal.textContent = throwRate.value;
+    roundLenVal.textContent = roundLen.value;
+    totalRoundsVal.textContent = totalRounds.value;
+    roundMaxVal.textContent = totalRounds.value;
+    aiDifficultyVal.textContent = diffLabel[Number(aiDifficulty.value)];
+  }
+  [playerSpeed, ballSpeed, throwRate, roundLen, totalRounds, aiDifficulty].forEach(s => s.addEventListener('input', reflectSliders));
+  reflectSliders();
+
+  function fitCanvas() {
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = Math.floor(rect.width * DPR);
+    canvas.height = Math.floor(rect.height * DPR);
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+  }
+  addEventListener('resize', fitCanvas, { passive:true });
+  fitCanvas();
+
+  // Colors & sizes
+  const COLORS = {
+    player: '#4aa3ff', thrower: '#ff5d5d', ball: '#b184ff',
+    lines: '#22282f', text: '#e6edf3',
+    ring1: '#9bd1ff', ring2: '#ffd76a', shield: '#7ee0a3', speedTrail: '#e3c86b'
+  };
+  const R_PLAYER = 10, R_THROWER = 12, R_BALL = 5, R_POWER = 8;
+
+  // World state
+  let players = [], throwers = [], balls = [], powerups = [];
+  let running = false, lastTime = 0, elapsed = 0;
+
+  // Rounds & scoring
+  let currentRound = 1;
+  let roundTime = Number(roundLen.value);
+  let roundCountdown = roundTime;
+  let scores = { players: 0, throwers: 0 };
+  let roundLog = [];
+
+  // Timers
+  let throwTimer = 0, powerTimer = 0;
+
+  // Manual control slots
+  let manualSlots = [0,1];
+  const input1 = {up:false,down:false,left:false,right:false};
+  const input2 = {up:false,down:false,left:false,right:false};
+
+  // Difficulty presets
+  function diffParams(){
+    const d = Number(aiDifficulty.value);
+    if (d===0) return { throwMult:1.3, speedMult:0.9, aimJitter:0.25, volleySize:2, spread:0.15 };
+    if (d===2) return { throwMult:0.75, speedMult:1.15, aimJitter:0.05, volleySize:5, spread:0.08 };
+    return { throwMult:1.0, speedMult:1.0, aimJitter:0.12, volleySize:3, spread:0.12 };
+  }
+  function params() {
+    const d = diffParams();
+    return {
+      basePlayerSpeed: Number(playerSpeed.value),
+      ballSpeed: Number(ballSpeed.value) * d.speedMult,
+      throwInterval: Math.max(0.15, Number(throwRate.value) * d.throwMult),
+      roundLength: Number(roundLen.value),
+      totalRounds: Number(totalRounds.value),
+      ai: d,
+      behavior: behaviorSel.value
+    };
+  }
+
+  // Utils
+  const rand = (a,b)=> a + Math.random()*(b-a);
+  const clamp = (x,a,b)=> Math.max(a,Math.min(b,x));
+  function dist2(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return dx*dx+dy*dy; }
+  function unit(from,to){ let dx=to.x-from.x, dy=to.y-from.y; const n=Math.hypot(dx,dy)||1; return {x:dx/n,y:dy/n}; }
+  function randomPoint(pad=24){ return { x: rand(pad, canvas.width/DPR - pad), y: rand(pad, canvas.height/DPR - pad) }; }
+  function rotate(vx,vy,ang){ const c=Math.cos(ang), s=Math.sin(ang); return { x: vx*c - vy*s, y: vx*s + vy*c }; }
+
+  // Entities
+  function spawnPlayers(n=5) {
+    players = [];
+    for (let i=0;i<n;i++){
+      const p = randomPoint(60);
+      players.push({ x:p.x, y:p.y, vx: rand(-40,40), vy: rand(-40,40), alive: true, shieldTimer: 0, speedTimer: 0, wasHitFlash: 0 });
+    }
+  }
+  function spawnThrowers() {
+    throwers = [];
+    const w = canvas.width/DPR, h = canvas.height/DPR;
+    throwers.push({ x: 40, y: h*0.5 });
+    throwers.push({ x: w-40, y: h*0.5 });
+  }
+  function shootBallXY(x, y, vx, vy){ balls.push({ x, y, vx, vy, ttl: 6.0 }); }
+
+  // Aiming
+  function nearestAlivePlayer(from){
+    let best=null, bestD2=Infinity;
+    for (const p of players){ if (!p.alive) continue; const d2=dist2(from,p); if (d2<bestD2){bestD2=d2; best=p;} }
+    return best;
+  }
+  function aimNearest(t){
+    const target = nearestAlivePlayer(t); if (!target) return null;
+    return { target, dir: unit(t, target) };
+  }
+  function aimLead(t, speed){
+    const target = nearestAlivePlayer(t); if (!target) return null;
+    const dx = target.x - t.x, dy = target.y - t.y;
+    const dist = Math.hypot(dx,dy)||1;
+    const estT = clamp(dist / speed, 0.05, 0.9);
+    const px = target.x + target.vx * estT;
+    const py = target.y + target.vy * estT;
+    return { target, dir: unit(t, {x:px, y:py}) };
+  }
+
+  // Power-ups
+  function spawnPowerup(){
+    const kinds = ['speed','shield'];
+    const type = kinds[Math.random() < 0.5 ? 0 : 1];
+    const p = randomPoint(40);
+    powerups.push({ x:p.x, y:p.y, type, ttl: 12 + Math.random()*6 });
+  }
+
+  // Round lifecycle
+  function startRound(resetScores=false){
+    if (resetScores){ scores.players = 0; scores.throwers = 0; roundLog = []; }
+    spawnPlayers(5); spawnThrowers();
+    balls = []; powerups = [];
+    elapsed = 0; throwTimer = 0; powerTimer = 0;
+    roundTime = Number(roundLen.value); roundCountdown = roundTime;
+    running = true; statusEl.textContent = `Round ${currentRound} Running`;
+    hideBoard(); updateHUD();
+  }
+  function endRound(winner){
+    running = false;
+    if (winner === 'players') scores.players++; else scores.throwers++;
+    const survivors = players.filter(p=>p.alive).length;
+    roundLog.push({ round: currentRound, winner, time: (params().roundLength - roundCountdown).toFixed(1), survivors });
+    statusEl.textContent = `Round ${currentRound} over — ${winner.toUpperCase()} score`; updateHUD();
+    const total = Number(totalRounds.value);
+    if (currentRound < total){
+      setTimeout(() => { currentRound++; roundVal.textContent = currentRound; startRound(false); }, 900);
+    } else {
+      showBoard();
+    }
+  }
+  function resetAll(){ currentRound = 1; roundVal.textContent = currentRound; startRound(true); }
+
+  // Keyboard input
+  addEventListener('keydown', (e) => {
+    if (e.key === 'Tab'){ e.preventDefault(); if (players.length){ manualSlots = manualSlots.map(i => (i+1) % players.length); } }
+    switch(e.key){
+      case 'w': case 'W': input1.up = true; break;
+      case 's': case 'S': input1.down = true; break;
+      case 'a': case 'A': input1.left = true; break;
+      case 'd': case 'D': input1.right = true; break;
+      case 'ArrowUp':    input2.up = true; break;
+      case 'ArrowDown':  input2.down = true; break;
+      case 'ArrowLeft':  input2.left = true; break;
+      case 'ArrowRight': input2.right = true; break;
+    }
+  });
+  addEventListener('keyup', (e) => {
+    switch(e.key){
+      case 'w': case 'W': input1.up = false; break;
+      case 's': case 'S': input1.down = false; break;
+      case 'a': case 'A': input1.left = false; break;
+      case 'd': case 'D': input1.right = false; break;
+      case 'ArrowUp':    input2.up = false; break;
+      case 'ArrowDown':  input2.down = false; break;
+      case 'ArrowLeft':  input2.left = false; break;
+      case 'ArrowRight': input2.right = false; break;
+    }
+  });
+
+  // ===== Touch controls =====
+  const touchWrap = document.getElementById('touchWrap');
+  const touchToggle = document.getElementById('touchToggle');
+  const padL = document.getElementById('padL'); const knobL = padL.querySelector('.knob');
+  const padR = document.getElementById('padR'); const knobR = padR.querySelector('.knob');
+
+  // Auto-show on touch devices
+  const prefersTouch = 'ontouchstart' in window || matchMedia('(pointer: coarse)').matches;
+  touchToggle.checked = prefersTouch;
+  updateTouchVisibility();
+
+  touchToggle.addEventListener('change', updateTouchVisibility);
+  function updateTouchVisibility(){
+    touchWrap.style.display = touchToggle.checked ? 'block' : 'none';
+  }
+
+  setupPad(padL, knobL, (vx,vy) => vecToButtons(vx,vy, input1));
+  setupPad(padR, knobR, (vx,vy) => vecToButtons(vx,vy, input2));
+
+  function setupPad(padEl, knobEl, onVec){
+    let tid = null, cx=0, cy=0, radius = padEl.clientWidth/2, maxMove = radius-20;
+    function center(){ const r = padEl.getBoundingClientRect(); cx = r.left + r.width/2; cy = r.top + r.height/2; }
+    addEventListener('resize', center, {passive:true}); center();
+
+    function setKnob(dx,dy){
+      const len = Math.hypot(dx,dy); const cl = len>1 ? 1 : len;
+      const nx = (dx/ (len||1)) * cl, ny = (dy/ (len||1)) * cl;
+      knobEl.style.transform = `translate(calc(-50% + ${nx*maxMove}px), calc(-50% + ${ny*maxMove}px))`;
+      onVec(nx, ny);
+    }
+    function reset(){ tid=null; knobEl.style.transform='translate(-50%,-50%)'; onVec(0,0); }
+
+    padEl.addEventListener('touchstart', (e)=>{
+      if (tid!==null) return;
+      const t = e.changedTouches[0]; tid = t.identifier; center();
+      const dx = (t.clientX - cx)/maxMove, dy = (t.clientY - cy)/maxMove;
+      setKnob(dx, dy); e.preventDefault();
+    }, {passive:false});
+
+    padEl.addEventListener('touchmove', (e)=>{
+      const t = findTouch(e.changedTouches, tid); if (!t) return;
+      const dx = (t.clientX - cx)/maxMove, dy = (t.clientY - cy)/maxMove;
+      setKnob(dx, dy); e.preventDefault();
+    }, {passive:false});
+
+    padEl.addEventListener('touchend', (e)=>{ if (findTouch(e.changedTouches, tid)) reset(); }, {passive:true});
+    padEl.addEventListener('touchcancel', (e)=>{ if (findTouch(e.changedTouches, tid)) reset(); }, {passive:true});
+  }
+  function findTouch(list, id){ for (let i=0;i<list.length;i++) if (list[i].identifier===id) return list[i]; return null; }
+  function vecToButtons(x,y, input){
+    // x,y in [-1,1], y positive down
+    const dead = 0.22;
+    input.up = (y < -dead);
+    input.down = (y > dead);
+    input.left = (x < -dead);
+    input.right = (x > dead);
+  }
+
+  // Update loop
+  function update(dt){
+    if (!running) return;
+    const P = params();
+    elapsed += dt;
+    roundCountdown = clamp(roundCountdown - dt, 0, P.roundLength);
+
+    // Throwers fire
+    throwTimer += dt;
+    if (throwTimer >= P.throwInterval){
+      throwTimer = 0;
+      for (const t of throwers){
+        const speed = P.ballSpeed;
+        const jitter = P.ai.aimJitter;
+        if (P.behavior === 'nearest'){
+          const aim = aimNearest(t);
+          if (aim){
+            let v = { x: aim.dir.x*speed, y: aim.dir.y*speed };
+            const rot = (Math.random()*2 - 1) * jitter;
+            v = rotate(v.x, v.y, rot);
+            shootBallXY(t.x, t.y, v.x, v.y);
+          }
+        } else if (P.behavior === 'lead'){
+          const aim = aimLead(t, speed);
+          if (aim){
+            let v = { x: aim.dir.x*speed, y: aim.dir.y*speed };
+            const rot = (Math.random()*2 - 1) * jitter * 0.7;
+            v = rotate(v.x, v.y, rot);
+            shootBallXY(t.x, t.y, v.x, v.y);
+          }
+        } else if (P.behavior === 'volley'){
+          const target = nearestAlivePlayer(t);
+          if (target){
+            const to = Math.random()<0.5 ? target : { x: canvas.width/DPR*0.5, y: canvas.height/DPR*0.5 };
+            const dir = unit(t, to);
+            const base = { x: dir.x*speed, y: dir.y*speed };
+            const n = P.ai.volleySize;
+            for (let i=0;i<n;i++){
+              const spreadAng = (Math.random()*2 - 1) * P.ai.spread;
+              const v = rotate(base.x, base.y, spreadAng + (Math.random()*2 - 1)*jitter*0.5);
+              const vm = 0.9 + Math.random()*0.25; // speed variance
+              shootBallXY(t.x, t.y, v.x*vm, v.y*vm);
+            }
+          }
+        }
+      }
+    }
+
+    // Power-up spawn
+    powerTimer += dt;
+    const want = 3;
+    if (powerups.length < want && powerTimer > rand(3,6)){ powerTimer = 0; spawnPowerup(); }
+
+    // Balls
+    for (const b of balls){ b.x += b.vx*dt; b.y += b.vy*dt; b.ttl -= dt; }
+    const w = canvas.width/DPR, h = canvas.height/DPR;
+    balls = balls.filter(b => b.ttl>0 && b.x>-20 && b.x<w+20 && b.y>-20 && b.y<h+20);
+
+    // Power-ups TTL
+    for (const p of powerups) p.ttl -= dt;
+    powerups = powerups.filter(p => p.ttl > 0);
+
+    // Players
+    const baseSpeed = Number(playerSpeed.value);
+    for (let i=0;i<players.length;i++){
+      const p = players[i];
+      if (!p.alive) continue;
+
+      p.speedTimer = Math.max(0, p.speedTimer - dt);
+      p.shieldTimer = Math.max(0, p.shieldTimer - dt);
+      p.wasHitFlash = Math.max(0, p.wasHitFlash - dt);
+
+      const input = (i===manualSlots[0]) ? input1 : (i===manualSlots[1]) ? input2 : null;
+      const speedMult = p.speedTimer > 0 ? 1.8 : 1.0;
+      const maxSpeed = baseSpeed * speedMult;
+
+      if (input){
+        const accel = 380 * speedMult, fric = 0.9;
+        let ax=0, ay=0;
+        if (input.up) ay -= accel;
+        if (input.down) ay += accel;
+        if (input.left) ax -= accel;
+        if (input.right) ax += accel;
+        p.vx += ax * dt; p.vy += ay * dt;
+        p.vx *= fric; p.vy *= fric;
+        const sp = Math.hypot(p.vx, p.vy);
+        if (sp > maxSpeed){ p.vx *= maxSpeed/sp; p.vy *= maxSpeed/sp; }
+      } else {
+        const jitter = 18 * (p.speedTimer>0 ? 1.2 : 1.0);
+        p.vx += rand(-jitter, jitter) * dt;
+        p.vy += rand(-jitter, jitter) * dt;
+
+        let threat = null, bestD2 = Infinity;
+        for (const b of balls){ const d2=dist2(p,b); if (d2<bestD2){bestD2=d2; threat=b;} }
+        for (const t of throwers){ const d2=dist2(p,t); if (d2<bestD2){bestD2=d2; threat=t;} }
+        if (threat){
+          const away = unit(threat, p);
+          const steer = clamp(2200/(bestD2+1), 0.1, 1.3);
+          p.vx += away.x * 150 * steer * dt * speedMult;
+          p.vy += away.y * 150 * steer * dt * speedMult;
+        }
+        const sp = Math.hypot(p.vx, p.vy);
+        if (sp > maxSpeed){ p.vx *= maxSpeed/sp; p.vy *= maxSpeed/sp; }
+      }
+
+      p.x += p.vx*dt; p.y += p.vy*dt;
+
+      if (p.x < R_PLAYER){ p.x = R_PLAYER; p.vx = Math.abs(p.vx); }
+      if (p.x > w-R_PLAYER){ p.x = w-R_PLAYER; p.vx = -Math.abs(p.vx); }
+      if (p.y < R_PLAYER){ p.y = R_PLAYER; p.vy = Math.abs(p.vy); }
+      if (p.y > h-R_PLAYER){ p.y = h-R_PLAYER; p.vy = -Math.abs(p.vy); }
+
+      // Pickup power-ups
+      for (let k=powerups.length-1;k>=0;k--){
+        const pu = powerups[k];
+        const dx = p.x - pu.x, dy = p.y - pu.y;
+        if (dx*dx + dy*dy <= (R_PLAYER+R_POWER)*(R_PLAYER+R_POWER)){
+          if (pu.type==='speed') p.speedTimer = 6.0;
+          if (pu.type==='shield') p.shieldTimer = 6.0;
+          powerups.splice(k,1);
+        }
+      }
+    }
+
+    // Collisions
+    const rsum = R_PLAYER + R_BALL;
+    for (const p of players){
+      if (!p.alive) continue;
+      for (const b of balls){
+        const dx = p.x - b.x, dy = p.y - b.y;
+        if (dx*dx + dy*dy <= rsum*rsum){
+          if (p.shieldTimer > 0){ p.shieldTimer = 0; p.wasHitFlash = 0.25; } else { p.alive = false; }
+          break;
+        }
+      }
+    }
+
+    // Win conditions
+    const aliveCount = players.filter(p=>p.alive).length;
+    if (aliveCount === 0){ endRound('throwers'); }
+    else if (roundCountdown <= 0){ endRound('players'); }
+
+    updateHUD();
+  }
+
+  function updateHUD(){
+    aliveVal.textContent = players.filter(p=>p.alive).length;
+    ballsVal.textContent = String(balls.length);
+    outVal.textContent = players.filter(p=>!p.alive).length;
+    timeVal.textContent = `${elapsed.toFixed(1)}s`;
+    roundTimerVal.textContent = `${roundCountdown.toFixed(1)}s`;
+    scorePlayersEl.textContent = String(scores.players);
+    scoreThrowersEl.textContent = String(scores.throwers);
+    statusEl.style.color = running ? 'var(--ok)' : 'var(--muted)';
+  }
+
+  function drawGrid(){
+    const w = canvas.width/DPR, h = canvas.height/DPR;
+    ctx.save(); ctx.strokeStyle = COLORS.lines; ctx.lineWidth = 1;
+    const step = 40;
+    for (let x=step; x<w; x+=step){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
+    for (let y=step; y<h; y+=step){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+    ctx.restore();
+  }
+
+  function render() {
+    const w = canvas.width/DPR, h = canvas.height/DPR;
+    ctx.clearRect(0,0,w,h);
+    drawGrid();
+
+    // Power-ups
+    for (const pu of powerups){
+      ctx.save(); ctx.translate(pu.x, pu.y);
+      ctx.fillStyle = '#ffd76a'; ctx.strokeStyle = '#5a4a1e'; ctx.lineWidth = 1.2;
+      if (pu.type === 'speed'){
+        ctx.beginPath();
+        ctx.moveTo(-6,-7); ctx.lineTo(2,-3); ctx.lineTo(-2,1); ctx.lineTo(6,7); ctx.lineTo(-1,3); ctx.lineTo(2,-1); ctx.closePath();
+        ctx.fill(); ctx.stroke();
+      } else {
+        ctx.beginPath(); ctx.arc(0,0,R_POWER,0,Math.PI*2); ctx.fill(); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0,-R_POWER+2); ctx.lineTo(0, R_POWER-2); ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Balls
+    ctx.fillStyle = COLORS.ball;
+    for (const b of balls){ ctx.beginPath(); ctx.arc(b.x,b.y,R_BALL,0,Math.PI*2); ctx.fill(); }
+
+    // Throwers
+    for (const t of throwers){
+      ctx.beginPath(); ctx.fillStyle = COLORS.thrower;
+      ctx.arc(t.x, t.y, R_THROWER, 0, Math.PI*2); ctx.fill();
+      ctx.strokeStyle = '#ff9a9a'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(t.x-8,t.y); ctx.lineTo(t.x+8,t.y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(t.x,t.y-8); ctx.lineTo(t.x,t.y+8); ctx.stroke();
+    }
+
+    // Players
+    for (let i=0;i<players.length;i++){
+      const p = players[i];
+
+      if (p.speedTimer > 0 && p.alive){
+        ctx.save(); ctx.globalAlpha = 0.35; ctx.strokeStyle = COLORS.speedTrail; ctx.lineWidth = 6;
+        ctx.beginPath(); ctx.moveTo(p.x - p.vx*0.05, p.y - p.vy*0.05); ctx.lineTo(p.x, p.y); ctx.stroke(); ctx.restore();
+      }
+
+      ctx.beginPath(); ctx.fillStyle = p.alive ? COLORS.player : '#3c4b5a';
+      ctx.arc(p.x, p.y, R_PLAYER, 0, Math.PI*2); ctx.fill();
+
+      // Rings for human slots
+      if (p.alive && (i===manualSlots[0] || i===manualSlots[1])){
+        ctx.save(); ctx.lineWidth = 2; ctx.strokeStyle = (i===manualSlots[0])?COLORS.ring1:COLORS.ring2;
+        const pulse = 2 + Math.sin(performance.now()/220 + (i===manualSlots[0]?0:1))*1.5;
+        ctx.beginPath(); ctx.arc(p.x, p.y, R_PLAYER + 6 + pulse, 0, Math.PI*2); ctx.stroke(); ctx.restore();
+      }
+
+      if (p.alive && p.shieldTimer > 0){
+        ctx.save(); ctx.globalAlpha = 0.35 + 0.15*Math.sin(performance.now()/150);
+        ctx.strokeStyle = COLORS.shield; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(p.x, p.y, R_PLAYER + 10, 0, Math.PI*2); ctx.stroke(); ctx.restore();
+      }
+
+      if (!p.alive){
+        ctx.strokeStyle = '#708196'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(p.x-6,p.y-6); ctx.lineTo(p.x+6,p.y+6); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(p.x-6,p.y+6); ctx.lineTo(p.x+6,p.y-6); ctx.stroke();
+      }
+      if (p.wasHitFlash > 0){
+        ctx.save(); ctx.globalAlpha = p.wasHitFlash * 2.5; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(p.x, p.y, R_PLAYER+3, 0, Math.PI*2); ctx.stroke(); ctx.restore();
+      }
+    }
+  }
+
+  // Scoreboard UI
+  const overlay = document.getElementById('overlay');
+  const boardSummary = document.getElementById('boardSummary');
+  const boardBody = document.getElementById('boardBody');
+  const restartBtn = document.getElementById('restartBtn');
+  const closeBoardBtn = document.getElementById('closeBoardBtn');
+
+  function showBoard(){
+    overlay.style.display = 'flex';
+    boardBody.innerHTML = '';
+    for (const row of roundLog){
+      const tr = document.createElement('tr');
+      const wBadge = `<span class="badge ${row.winner==='players'?'bPlayers':'bThrowers'}">${row.winner}</span>`;
+      tr.innerHTML = `<td>${row.round}</td><td>${wBadge}</td><td>${row.time}</td><td>${row.survivors}</td>`;
+      boardBody.appendChild(tr);
+    }
+    boardSummary.textContent = `Final Score — Players ${scores.players} : ${scores.throwers} Throwers`;
+  }
+  function hideBoard(){ overlay.style.display = 'none'; }
+  restartBtn.addEventListener('click', () => { hideBoard(); resetAll(); });
+  closeBoardBtn.addEventListener('click', hideBoard);
+  overlay.addEventListener('click', (e)=>{ if(e.target===overlay) hideBoard(); });
+
+  // Main loop
+  function loop(t){
+    const now = t/1000;
+    const dt = lastTime ? Math.min(0.033, now - lastTime) : 0;
+    lastTime = now;
+    update(dt);
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  // Controls
+  startBtn.addEventListener('click', () => { running = true; statusEl.textContent = `Round ${currentRound} Running`; });
+  pauseBtn.addEventListener('click', () => { running = false; statusEl.textContent = 'Paused'; });
+  resetBtn.addEventListener('click', () => { resetAll(); });
+  nextRoundBtn.addEventListener('click', () => {
+    if (running) return;
+    const total = Number(totalRounds.value);
+    if (currentRound < total){ currentRound++; roundVal.textContent = currentRound; startRound(false); }
+  });
+
+  // Kick off
+  startRound(true);
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
 
